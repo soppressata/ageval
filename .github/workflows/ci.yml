@@ -1,0 +1,20 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pytest
+      - run: python -m pytest -q
+      - run: python -c "import ageval; print(ageval.__version__)"
+      - run: python -m ageval validate suites/demo.jsonl
+      - run: python -m ageval run suites/demo.jsonl --agent echo --tags smoke --out /tmp/ci-runs --format json,markdown,html --quiet

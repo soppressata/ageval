@@ -1,0 +1,10 @@
+{"id": "demo-exact-1", "input": "Echo this exactly", "expected": "Echo this exactly", "scorer": "exact", "tags": ["smoke"]}
+{"id": "demo-exact-2", "input": "What is the capital of France?", "expected": "Paris", "scorer": "exact", "tags": ["math"]}
+{"id": "demo-includes-1", "input": "The quick brown fox jumps over the lazy dog", "expected": ["quick", "fox"], "scorer": "includes", "scorer_args": {"case_sensitive": false}, "tags": ["smoke", "format"]}
+{"id": "demo-includes-2", "input": "Summarize the benefits of daily exercise", "expected": ["health", "strength"], "scorer": "includes", "tags": ["reasoning"]}
+{"id": "demo-regex-1", "input": "Order #12345 confirmed for $99.99", "scorer": "regex", "scorer_args": {"pattern": "Order #\\d+ confirmed"}, "tags": ["smoke", "format"]}
+{"id": "demo-regex-2", "input": "Is the number 42 prime?", "scorer": "regex", "scorer_args": {"pattern": "^(no|false)$"}, "tags": ["reasoning"]}
+{"id": "demo-numeric-1", "input": "The answer is 42.", "expected": 42, "scorer": "numeric", "tags": ["smoke", "math"]}
+{"id": "demo-numeric-2", "input": "What is 15 times 17?", "expected": 255, "scorer": "numeric", "tags": ["math"]}
+{"id": "demo-json-1", "input": "{\"name\": \"Alice\", \"age\": 30, \"city\": \"NYC\"}", "expected": {"name": "Alice", "age": 30}, "scorer": "json_subset", "tags": ["smoke", "format"]}
+{"id": "demo-json-2", "input": "List three colors", "expected": {"colors": ["red", "green", "blue"]}, "scorer": "json_subset", "tags": ["reasoning"]}

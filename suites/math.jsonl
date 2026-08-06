@@ -1,0 +1,5 @@
+{"id": "math-add", "input": "What is 123 plus 456?", "expected": 579, "scorer": "numeric", "tags": ["math"]}
+{"id": "math-mult", "input": "Calculate 23 times 4", "expected": 92, "scorer": "numeric", "tags": ["math"]}
+{"id": "math-sub", "input": "Subtract 8 from 50", "expected": 42, "scorer": "numeric", "tags": ["math"]}
+{"id": "math-div", "input": "Divide 100 by 4", "expected": 25, "scorer": "numeric", "tags": ["math"]}
+{"id": "math-word", "input": "If a bus holds 30 people and makes 7 trips, what is the total?", "expected": 210, "scorer": "numeric", "tags": ["math"]}
