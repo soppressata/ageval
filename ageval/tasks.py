@@ -46,7 +46,7 @@ def _parse_jsonl(path: Path) -> list[Task]:
                 f"Malformed JSON in {path} at line {lineno}: expected JSON object"
             )
         d = dict(obj)
-        if not d.get("id"):
+        if "id" not in d:
             d["id"] = f"{stem}-{index}"
         index += 1
         tasks.append(_build_task(d))
@@ -82,7 +82,7 @@ def _parse_json(path: Path) -> list[Task]:
                 f"Invalid task entry in {path} at index {index}: expected JSON object"
             )
         d = dict(obj)
-        if not d.get("id"):
+        if "id" not in d:
             d["id"] = f"{stem}-{index}"
         tasks.append(_build_task(d))
     return tasks

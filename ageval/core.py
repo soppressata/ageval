@@ -73,6 +73,9 @@ class Score:
     detail: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "value", clamp01(self.value))
+
     def to_dict(self) -> dict:
         return {
             "value": self.value,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from typing import Any
 
 from ageval.core import Task, Prediction, Score, clamp01, get_agent, register_scorer
@@ -27,10 +28,13 @@ class LlmJudgeScorer(BaseScorer):
         self.rubric = rubric
         self.threshold = threshold
         self._judge: Any = None
+        self._judge_lock = threading.Lock()
 
     def _score(self, task: Task, prediction: Prediction) -> Score:
         if self._judge is None:
-            self._judge = get_agent(self.agent_name, **self.agent_args)
+            with self._judge_lock:
+                if self._judge is None:
+                    self._judge = get_agent(self.agent_name, **self.agent_args)
         rubric = (
             self.rubric
             if self.rubric is not None

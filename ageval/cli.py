@@ -8,7 +8,7 @@ import threading
 from collections import Counter
 from typing import Any
 
-from ageval.core import TaskResult, get_agent, list_agents, list_scorers
+from ageval.core import TaskResult, get_agent, get_scorer, list_agents, list_scorers
 from ageval.errors import TaskLoadError
 
 
@@ -104,6 +104,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    formats = [f.strip() for f in args.format.split(",") if f.strip()]
+    for fmt in formats:
+        if fmt not in {"json", "markdown", "html"}:
+            print(f"ageval: unknown format '{fmt}'", file=sys.stderr)
+            return 1
+
     agent_args = parse_kv(args.agent_args)
     try:
         from ageval.report import to_html, to_json, to_markdown
@@ -126,7 +132,13 @@ def _run(args: argparse.Namespace) -> int:
         cache_dir=args.cache_dir,
     )
     suite = suite_name(args.suite_path)
-    total = len(tasks)
+    selected_tasks = tasks
+    if tags:
+        wanted = set(tags)
+        selected_tasks = [t for t in selected_tasks if wanted.intersection(t.tags)]
+    if args.limit is not None:
+        selected_tasks = selected_tasks[: args.limit]
+    total = len(selected_tasks)
     state = {"done": 0}
     lock = threading.Lock()
 
@@ -154,7 +166,6 @@ def _run(args: argparse.Namespace) -> int:
     )
 
     summary = report.summary()
-    formats = [f.strip() for f in args.format.split(",") if f.strip()]
     writers = {
         "json": (to_json, ".json"),
         "markdown": (to_markdown, ".md"),
@@ -162,9 +173,6 @@ def _run(args: argparse.Namespace) -> int:
     }
     os.makedirs(args.out, exist_ok=True)
     for fmt in formats:
-        if fmt not in writers:
-            print(f"ageval: unknown format '{fmt}'", file=sys.stderr)
-            return 1
         fn, ext = writers[fmt]
         path = os.path.join(args.out, f"{report.run_id}{ext}")
         fn(report, path=path)
@@ -219,16 +227,26 @@ def _validate(args: argparse.Namespace) -> int:
         return 1
     print(f"ok: {len(tasks)} tasks in {args.suite_path}")
     counts: Counter = Counter(t.scorer for t in tasks)
+    valid = True
     for scorer in sorted(counts):
         print(f"  {scorer}: {counts[scorer]}")
     for t in tasks:
+        try:
+            get_scorer(t.scorer, **t.scorer_args)
+        except Exception as e:
+            print(
+                f"ageval: error: task {t.id} has invalid scorer "
+                f"'{t.scorer}': {e}",
+                file=sys.stderr,
+            )
+            valid = False
         if t.expected is None and t.scorer != "regex":
             print(
                 f"ageval: warning: task {t.id} has no expected value "
                 f"but uses scorer '{t.scorer}'",
                 file=sys.stderr,
             )
-    return 0
+    return 0 if valid else 1
 
 
 def main(argv: list[str] | None = None) -> int:

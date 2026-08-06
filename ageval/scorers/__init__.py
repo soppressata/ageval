@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from ageval.scorers import builtin as _builtin
 from ageval.scorers import llm_judge as _llm_judge
 

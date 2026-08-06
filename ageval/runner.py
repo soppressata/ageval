@@ -20,6 +20,7 @@ from ageval.core import (
     TaskResult,
     get_scorer,
 )
+from ageval.errors import ConfigError
 
 
 @dataclass
@@ -44,6 +45,17 @@ def run_suite(
     """Run a suite of tasks through an agent with the given configuration."""
     if config is None:
         config = RunConfig()
+
+    if not isinstance(config.concurrency, int) or isinstance(config.concurrency, bool) or config.concurrency <= 0:
+        raise ConfigError("concurrency must be a positive integer")
+    if not isinstance(config.max_retries, int) or isinstance(config.max_retries, bool) or config.max_retries < 0:
+        raise ConfigError("max_retries must be a non-negative integer")
+    if not isinstance(config.retry_backoff, (int, float)) or isinstance(config.retry_backoff, bool) or config.retry_backoff < 0:
+        raise ConfigError("retry_backoff must be non-negative")
+    if not isinstance(config.task_timeout, (int, float)) or isinstance(config.task_timeout, bool) or config.task_timeout <= 0:
+        raise ConfigError("task_timeout must be positive")
+    if config.limit is not None and (not isinstance(config.limit, int) or isinstance(config.limit, bool) or config.limit < 0):
+        raise ConfigError("limit must be non-negative or None")
 
     agent_name = getattr(agent, "name", agent.__class__.__name__)
 
@@ -81,7 +93,7 @@ def run_suite(
             return None
 
     def _write_cache(task: Task, prediction: Prediction) -> None:
-        if not config.cache_dir or prediction.error is not None:
+        if not config.cache_dir:
             return
         key = hashlib.sha256(
             f"{agent_name}\0{task.id}\0{task.input}".encode()
@@ -108,32 +120,14 @@ def run_suite(
             scorer_cache[cache_key] = scorer
             return scorer
 
-    def _worker(idx: int, task: Task) -> tuple[int, TaskResult]:
-        prediction = _get_cached_prediction(task)
-        attempts = 1
-
-        if prediction is None:
-            for attempt_index in range(config.max_retries + 1):
-                try:
-                    prediction = agent.predict(task)
-                except Exception as e:
-                    prediction = Prediction(error=str(e))
-                attempts = attempt_index + 1
-                if prediction.error is None:
-                    break
-                if attempt_index < config.max_retries:
-                    time.sleep(config.retry_backoff * (2 ** attempt_index))
-            _write_cache(task, prediction)
-
+    def _score_result(task: Task, prediction: Prediction, attempts: int) -> TaskResult:
         scorer = _get_scorer(task)
         try:
             score = scorer.score(task, prediction)
         except Exception as e:
             score = Score(0.0, False, detail=f"scoring error: {e}")
 
-        return idx, TaskResult(
-            task=task, prediction=prediction, score=score, attempts=attempts
-        )
+        return TaskResult(task=task, prediction=prediction, score=score, attempts=attempts)
 
     if not filtered:
         finished_at = datetime.now(timezone.utc).isoformat()
@@ -147,73 +141,95 @@ def run_suite(
             config=dataclasses.asdict(config),
         )
 
-    future_to_idx: dict[Future, int] = {}
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=config.concurrency)
+    pending: dict[Future, tuple[int, int, float]] = {}
+    next_index = 0
+    stopped = False
 
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=max(1, config.concurrency)
-    ) as executor:
-        for idx, task in enumerate(filtered):
-            future = executor.submit(_worker, idx, task)
-            future_to_idx[future] = idx
+    def record(idx: int, task_result: TaskResult) -> None:
+        results[idx] = task_result
+        if progress is not None:
+            with progress_lock:
+                try:
+                    progress(task_result)
+                except Exception:
+                    pass
 
-        start = time.monotonic()
-        finished: set[int] = set()
-        stopped = False
+    def record_cached(idx: int, prediction: Prediction) -> TaskResult:
+        task_result = _score_result(filtered[idx], prediction, 1)
+        record(idx, task_result)
+        return task_result
 
-        while not stopped and len(finished) < len(filtered):
-            elapsed = time.monotonic() - start
-            remaining = max(0.0, config.task_timeout - elapsed)
-            if remaining <= 0.0:
-                break
+    def submit_attempt(idx: int, attempt: int) -> None:
+        task = filtered[idx]
+        future = executor.submit(agent.predict, task)
+        pending[future] = (idx, attempt, time.monotonic())
 
-            unfinished = {f for f in future_to_idx if future_to_idx[f] not in finished}
-            try:
-                for future in concurrent.futures.as_completed(
-                    unfinished, timeout=remaining
-                ):
-                    idx = future_to_idx[future]
+    try:
+        while next_index < len(filtered) and len(pending) < config.concurrency:
+            cached = _get_cached_prediction(filtered[next_index])
+            if cached is not None:
+                task_result = record_cached(next_index, cached)
+                next_index += 1
+                if config.fail_fast and not task_result.ok:
+                    stopped = True
+                    break
+                continue
+            submit_attempt(next_index, 1)
+            next_index += 1
+
+        while pending and not stopped:
+            now = time.monotonic()
+            wait_timeout = min(
+                max(0.0, started + config.task_timeout - now)
+                for _, _, started in pending.values()
+            )
+            done, _ = concurrent.futures.wait(
+                pending, timeout=wait_timeout, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            now = time.monotonic()
+            expired = [
+                f for f, (_, _, started) in pending.items()
+                if f not in done and now - started >= config.task_timeout
+            ]
+            for future in done | set(expired):
+                if future not in pending:
+                    continue
+                idx, attempt, _ = pending.pop(future)
+                if future in done and future not in expired:
                     try:
-                        _, task_result = future.result()
+                        prediction = future.result()
                     except Exception as e:
-                        task_result = TaskResult(
-                            task=filtered[idx],
-                            prediction=Prediction(error=str(e)),
-                            score=Score(
-                                0.0, False, detail=f"scoring error: {e}"
-                            ),
-                            attempts=1,
-                        )
-                    results[idx] = task_result
-                    finished.add(idx)
-
-                    if progress is not None:
-                        with progress_lock:
-                            try:
-                                progress(task_result)
-                            except Exception:
-                                pass
-
-                    if config.fail_fast and not task_result.ok:
-                        stopped = True
-                        break
-            except concurrent.futures.TimeoutError:
-                pass
-
-        if stopped:
-            for f in future_to_idx:
-                f.cancel()
-            executor.shutdown(wait=False, cancel_futures=True)
-
-    # Record timeouts for any tasks that didn't finish (unless fail_fast stopped us).
-    if not stopped:
-        for idx in range(len(filtered)):
-            if results[idx] is None:
-                results[idx] = TaskResult(
-                    task=filtered[idx],
-                    prediction=Prediction(error=f"timeout after {config.task_timeout}s"),
-                    score=Score(0.0, False, "agent error"),
-                    attempts=1,
-                )
+                        prediction = Prediction(error=str(e))
+                else:
+                    future.cancel()
+                    prediction = Prediction(error=f"timeout after {config.task_timeout}s")
+                if prediction.error is not None and attempt <= config.max_retries:
+                    if config.retry_backoff:
+                        time.sleep(config.retry_backoff * (2 ** (attempt - 1)))
+                    submit_attempt(idx, attempt + 1)
+                    continue
+                _write_cache(filtered[idx], prediction)
+                task_result = _score_result(filtered[idx], prediction, attempt)
+                record(idx, task_result)
+                if config.fail_fast and not task_result.ok:
+                    stopped = True
+                    break
+                if next_index < len(filtered):
+                    cached = _get_cached_prediction(filtered[next_index])
+                    if cached is not None:
+                        task_result = record_cached(next_index, cached)
+                        next_index += 1
+                        if config.fail_fast and not task_result.ok:
+                            stopped = True
+                            break
+                    else:
+                        submit_attempt(next_index, 1)
+                        next_index += 1
+    finally:
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
 
     completed = [r for r in results if r is not None]
     finished_at = datetime.now(timezone.utc).isoformat()

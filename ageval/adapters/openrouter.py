@@ -96,13 +96,11 @@ class OpenRouterAgent:
             except urllib.error.HTTPError as e:
                 if e.code == 429 or e.code >= 500:
                     last_exc = e
-                    if attempt < 2:
-                        time.sleep(backoff_delays[attempt] + random.uniform(0, 0.25))
+                    time.sleep(backoff_delays[attempt] + random.uniform(0, 0.25))
                     continue
                 raise
             except (urllib.error.URLError, TimeoutError, OSError) as e:
                 last_exc = e
-                if attempt < 2:
-                    time.sleep(backoff_delays[attempt] + random.uniform(0, 0.25))
+                time.sleep(backoff_delays[attempt] + random.uniform(0, 0.25))
                 continue
         raise last_exc  # type: ignore[misc]

@@ -14,9 +14,13 @@ class SubprocessAgent:
     name: str = "subprocess"
 
     def __init__(self, command: list[str], timeout: float = 300.0) -> None:
-        if not isinstance(command, list) or len(command) == 0:
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(element, str) for element in command)
+        ):
             raise ConfigError("SubprocessAgent command must be a non-empty list[str]")
-        self.command = command
+        self.command = list(command)
         self.timeout = timeout
 
     def predict(self, task: Task) -> Prediction:
@@ -42,8 +46,6 @@ class SubprocessAgent:
                     raw=raw,
                 )
             output = result.stdout
-            if output.endswith("\n"):
-                output = output[:-1]
             latency_ms = (time.perf_counter() - start) * 1000.0
             return Prediction(output=output, latency_ms=latency_ms, raw=raw)
         except subprocess.TimeoutExpired:

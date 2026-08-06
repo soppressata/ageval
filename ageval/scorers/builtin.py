@@ -112,6 +112,12 @@ class RegexScorer(BaseScorer):
                 flag_val |= re.MULTILINE
             elif c == "s":
                 flag_val |= re.DOTALL
+            else:
+                return Score(
+                    value=0.0,
+                    passed=False,
+                    detail=f"scoring error: invalid regex flag: {c}",
+                )
         try:
             compiled = re.compile(pattern, flag_val)
         except re.error as e:
@@ -131,7 +137,7 @@ class NumericScorer(BaseScorer):
     """Compare the last number in the output against ``float(expected)``."""
 
     _NUMBER_RE = re.compile(
-        r"[-+]?(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?"
+        r"(?<![\d.,])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?(?![\d.,])"
     )
 
     def __init__(self, tolerance: float = 1e-6, relative: bool = False) -> None:
