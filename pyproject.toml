@@ -8,22 +8,18 @@ version = "0.1.0"
 description = "Pluggable agent evaluation harness — run task suites, score, and report"
 readme = "README.md"
 license = {text = "MIT"}
-authors = [{name="soppressata"}]
-maintainers = [{name="soppressata"}]
+authors = [{name = "soppressata"}]
+maintainers = [{name = "soppressata"}]
 keywords = ["agent", "evaluation", "llm", "benchmark"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Intended Audience :: Developers",
-    "Topic :: Scientific/ Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 requires-python = ">=3.11"
 dependencies = []
-urls = {
-    Homepage="https://github.com/soppressata/ageval",
-    Repository="https://github.com/soppressata/ageval",
-    Issues="https://github.com/soppressata/ageval/issues",
-}
+urls = {Homepage = "https://github.com/soppressata/ageval", Repository = "https://github.com/soppressata/ageval", Issues = "https://github.com/soppressata/ageval/issues"}
 
 [project.scripts]
 ageval = "ageval.cli:main"
