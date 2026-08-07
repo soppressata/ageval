@@ -37,6 +37,8 @@ class RunConfig:
     cache_dir: str | None = None
     budget: Budget | None = None
     sandbox: Sandbox | None = None
+    conversation: bool = False
+    max_turns: int = 5
 
 
 def _config_to_dict(config: RunConfig) -> dict[str, Any]:
@@ -82,6 +84,8 @@ def run_suite(
         raise ConfigError("budget must be a Budget instance or None")
     if config.sandbox is not None and not isinstance(config.sandbox, Sandbox):
         raise ConfigError("sandbox must be a Sandbox instance or None")
+    if not isinstance(config.max_turns, int) or isinstance(config.max_turns, bool) or config.max_turns <= 0:
+        raise ConfigError("max_turns must be a positive integer")
 
     agent_name = getattr(agent, "name", agent.__class__.__name__)
 
@@ -198,6 +202,24 @@ def run_suite(
         record(idx, task_result)
         return task_result
 
+    def _invoke_agent(agent: Any, task: Task) -> Prediction:
+        """Invoke the agent, using conversation mode if configured and supported.
+
+        When ``config.conversation`` is ``True`` and the agent exposes a
+        callable ``converse`` method, delegate to ``agent.converse(task,
+        history=[])`` and convert the returned ``ConversationResult`` into a
+        ``Prediction``. Otherwise fall back to ``agent.predict(task)``.
+        """
+        if config.conversation and callable(getattr(agent, "converse", None)):
+            conv = agent.converse(task, history=[])
+            return Prediction(
+                output=conv.final_output,
+                latency_ms=conv.total_latency_ms,
+                cost_usd=conv.total_cost_usd,
+                raw=conv.to_dict(),
+            )
+        return agent.predict(task)
+
     def submit_attempt(idx: int, attempt: int) -> None:
         task = filtered[idx]
         if config.sandbox is not None:
@@ -205,7 +227,7 @@ def run_suite(
                 config.sandbox.run, agent, task, config.task_timeout
             )
         else:
-            future = executor.submit(agent.predict, task)
+            future = executor.submit(_invoke_agent, agent, task)
         pending[future] = (idx, attempt, time.monotonic())
 
     try:
