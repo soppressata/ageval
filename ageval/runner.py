@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from ageval.budget import Budget, BudgetManager
 from ageval.core import (
     Prediction,
     RunReport,
@@ -21,6 +22,7 @@ from ageval.core import (
     get_scorer,
 )
 from ageval.errors import ConfigError
+from ageval.sandbox import Sandbox
 
 
 @dataclass
@@ -33,6 +35,26 @@ class RunConfig:
     limit: int | None = None
     tags: list[str] = field(default_factory=list)
     cache_dir: str | None = None
+    budget: Budget | None = None
+    sandbox: Sandbox | None = None
+
+
+def _config_to_dict(config: RunConfig) -> dict[str, Any]:
+    """Convert RunConfig to a JSON-serializable dict.
+
+    ``budget`` and ``sandbox`` are replaced with plain descriptors so the
+    report config survives ``json.dumps`` without altering v1 fields.
+    """
+    d = dataclasses.asdict(config)
+    if config.budget is not None:
+        d["budget"] = {
+            "max_cost_usd": config.budget.max_cost_usd,
+            "max_tokens": config.budget.max_tokens,
+            "max_latency_ms": config.budget.max_latency_ms,
+        }
+    if config.sandbox is not None:
+        d["sandbox"] = getattr(config.sandbox, "__class__", type(config.sandbox)).__name__
+    return d
 
 
 def run_suite(
@@ -56,6 +78,10 @@ def run_suite(
         raise ConfigError("task_timeout must be positive")
     if config.limit is not None and (not isinstance(config.limit, int) or isinstance(config.limit, bool) or config.limit < 0):
         raise ConfigError("limit must be non-negative or None")
+    if config.budget is not None and not isinstance(config.budget, Budget):
+        raise ConfigError("budget must be a Budget instance or None")
+    if config.sandbox is not None and not isinstance(config.sandbox, Sandbox):
+        raise ConfigError("sandbox must be a Sandbox instance or None")
 
     agent_name = getattr(agent, "name", agent.__class__.__name__)
 
@@ -77,6 +103,18 @@ def run_suite(
 
     if config.cache_dir:
         os.makedirs(config.cache_dir, exist_ok=True)
+
+    budget_mgr = BudgetManager(config.budget) if config.budget is not None else None
+
+    def _budget_exceeded_reason(status: Any) -> str:
+        reasons: list[str] = []
+        if status.total_cost_usd is not None:
+            reasons.append(f"cost=${status.total_cost_usd:.4f}")
+        if status.total_tokens is not None:
+            reasons.append(f"tokens={status.total_tokens}")
+        if status.total_latency_ms is not None:
+            reasons.append(f"latency={status.total_latency_ms:.0f}ms")
+        return "budget exceeded: " + ", ".join(reasons) if reasons else "budget exceeded"
 
     def _get_cached_prediction(task: Task) -> Prediction | None:
         if not config.cache_dir:
@@ -138,7 +176,7 @@ def run_suite(
             started_at=started_at,
             finished_at=finished_at,
             results=[],
-            config=dataclasses.asdict(config),
+            config=_config_to_dict(config),
         )
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=config.concurrency)
@@ -162,7 +200,12 @@ def run_suite(
 
     def submit_attempt(idx: int, attempt: int) -> None:
         task = filtered[idx]
-        future = executor.submit(agent.predict, task)
+        if config.sandbox is not None:
+            future = executor.submit(
+                config.sandbox.run, agent, task, config.task_timeout
+            )
+        else:
+            future = executor.submit(agent.predict, task)
         pending[future] = (idx, attempt, time.monotonic())
 
     try:
@@ -204,6 +247,10 @@ def run_suite(
                 else:
                     future.cancel()
                     prediction = Prediction(error=f"timeout after {config.task_timeout}s")
+                if budget_mgr is not None:
+                    status = budget_mgr.consume(prediction)
+                    if status.stopped:
+                        prediction = Prediction(error=_budget_exceeded_reason(status))
                 if prediction.error is not None and attempt <= config.max_retries:
                     if config.retry_backoff:
                         time.sleep(config.retry_backoff * (2 ** (attempt - 1)))
@@ -213,6 +260,9 @@ def run_suite(
                 task_result = _score_result(filtered[idx], prediction, attempt)
                 record(idx, task_result)
                 if config.fail_fast and not task_result.ok:
+                    stopped = True
+                    break
+                if budget_mgr is not None and budget_mgr.should_stop():
                     stopped = True
                     break
                 if next_index < len(filtered):
@@ -241,7 +291,7 @@ def run_suite(
         started_at=started_at,
         finished_at=finished_at,
         results=completed,
-        config=dataclasses.asdict(config),
+        config=_config_to_dict(config),
     )
 
 
